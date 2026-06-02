@@ -3,7 +3,7 @@ const path = require('path');
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const { Vec3 } = require('vec3');
-const inventoryViewer = require('mineflayer-web-inventory')
+const inventoryViewer = require('mineflayer-web-inventory');
 
 // .env faylidan sozlamalarni yuklash
 function loadEnvFile(filePath) {
@@ -19,7 +19,6 @@ function loadEnvFile(filePath) {
     if (!process.env[key]) process.env[key] = value;
   }
 }
-
 loadEnvFile(path.join(__dirname, '..', '.env'));
 
 function toNumber(value, fallback) {
@@ -27,20 +26,20 @@ function toNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function parseVersion(value) {
-  if (!value || value === 'false' || value === 'auto') return false;
-  return value;
-}
-
-function log(message) {
-  console.log(`[${new Date().toISOString()}] [CocoaBot] ${message}`);
-}
+// ==========================================
+// QO'LDA KIRITILADIGAN BOTLAR RO'YXATI
+// ==========================================
+// 1-bot: 'harvester' faqat yig'adi va sandiqqa joylaydi
+// 2-bot: 'planter' sandiqdan urug' oladi va ekib chiqadi
+const BOTS_CONFIG = [
+  { username: 'l0rd1x', role: 'harvester', port: 3008 },
+  { username: 'lord1x',   role: 'planter',   port: 3009 }
+];
 
 const config = {
   host: process.env.MC_HOST || 'localhost',
   port: toNumber(process.env.MC_PORT, 25565),
-  username: process.env.MC_COCOA_USERNAME || 'l0rd1x', // Boshqa ism bilan ulanadi
-  version: parseVersion(process.env.MC_VERSION),
+  version: process.env.MC_VERSION && process.env.MC_VERSION !== 'false' && process.env.MC_VERSION !== 'auto' ? process.env.MC_VERSION : false,
   auth: process.env.MC_AUTH || 'offline',
   password: process.env.MC_PASSWORD || '',
   autoLogin: process.env.AUTO_LOGIN !== 'false',
@@ -48,23 +47,19 @@ const config = {
   reconnectDelayMs: toNumber(process.env.RECONNECT_DELAY_MS, 5000),
 };
 
-let bot = null;
-let isWorking = false;
-let reconnectTimer = null;
-let farmInterval = null;
+const chestFile = path.join(__dirname, 'chest-pos.json');
 let chestPos = null;
 
-const chestFile = path.join(__dirname, 'chest-pos.json');
 try {
   if (fs.existsSync(chestFile)) {
     const data = JSON.parse(fs.readFileSync(chestFile, 'utf8'));
     if (data && data.x !== undefined && data.y !== undefined && data.z !== undefined) {
       chestPos = new Vec3(data.x, data.y, data.z);
-      log(`Oldingi sandiq kordinatasi yuklandi: ${chestPos.x}, ${chestPos.y}, ${chestPos.z}`);
+      console.log(`[Tizim] Oldingi sandiq kordinatasi yuklandi: ${chestPos.x}, ${chestPos.y}, ${chestPos.z}`);
     }
   }
 } catch (err) {
-  log(`Sandiq faylini o'qishda xatolik: ${err.message}`);
+  console.log(`[Tizim] Sandiq faylini o'qishda xatolik: ${err.message}`);
 }
 
 function saveChestPos(pos) {
@@ -72,331 +67,361 @@ function saveChestPos(pos) {
   fs.writeFileSync(chestFile, JSON.stringify({ x: pos.x, y: pos.y, z: pos.z }));
 }
 
-function startBot() {
-  clearReconnect();
-  
-  bot = mineflayer.createBot({
-    host: config.host,
-    port: config.port,
-    username: config.username,
-    version: config.version,
-    auth: config.auth
-  });
+const activeBots = new Map(); // username -> bot state instance
 
-  bot.loadPlugin(pathfinder);
-
-  bot.once('spawn', () => {
-    const movements = new Movements(bot);
-    
-    // Pathfinder yo'l topishda cocoa beanlarni sindirib yubormasligi uchun ularni chetlab o'tishini ta'minlaymiz
-    if (bot.registry.blocksByName.cocoa) {
-        movements.blocksToAvoid.add(bot.registry.blocksByName.cocoa.id);
-    }
-    movements.canDig = false; // Hosilni tasodifan buzmasligi uchun umumiy qazishni o'chiramiz
-    bot.pathfinder.setMovements(movements);
-
-    log(`Serverga ulandi: ${config.host}:${config.port} (${bot.username})`);
-    
-    // Web inventoryni ishga tushirish (port 3008, oldingi bot xalaqit bermasligi uchun)
-    inventoryViewer(bot, { port: 3008 });
-    log(`Web Inventar ishga tushdi: http://localhost:3008`);
-
-    loginIfNeeded();
-    
-    setTimeout(() => {
-      if (bot && bot.entity) {
-          bot.chat('/anarxiya');
-          log('/anarxiya buyrug\'i yuborildi.');
-      }
-    }, 1000);
-    
-    // Hosilni izlash va yig'ish siklini boshlash
-    if (farmInterval) clearInterval(farmInterval);
-    farmInterval = setInterval(farmLoop, 2000); // Har 2 soniyada atrofni tekshiradi
-  });
-
-  bot.on('messagestr', message => {
-    handleAuthPrompt(message);
-  });
-
-  bot.on('kicked', reason => {
-    const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);
-    log(`Serverdan chiqarildi: ${reasonStr}`);
-    
-    if (reasonStr.includes('ko‘p akkaunt') || reasonStr.includes('ko\\u2018p akkaunt')) {
-        log('====================================================');
-        log('XATOLIK: Sizning IP manzilingizdan ruxsat etilganidan ko\'p akkaunt ochilgan.');
-        log('YECHIM: Server qoidasiga ko\'ra 1 ta IP dan faqat bir nechta akkaunt ochish mumkin.');
-        log('1) .env faylida MC_COCOA_USERNAME=EskiAcc va MC_COCOA_PASSWORD=Parol orqali avval ro\'yxatdan o\'tgan profilingizni ulang.');
-        log('2) YOKI telefoningiz (VPN/Mobil data) orqali serverga kirib CocoaBot ismini ro\'yxatdan o\'tkazing, keyin botni ishlating.');
-        log('====================================================');
-        config.autoReconnect = false; // Spam qilib bloklanmaslik uchun ulanishni to'xtatamiz
-    }
-  });
-
-  bot.on('error', error => {
-    log(`Xato: ${error.message}`);
-  });
-
-  bot.on('end', () => {
-    log('Ulanish uzildi.');
-    if (farmInterval) {
-        clearInterval(farmInterval);
-        farmInterval = null;
-    }
-    isWorking = false;
-    scheduleReconnect();
-  });
-}
-
-function loginIfNeeded() {
-  if (!config.autoLogin || !config.password) return;
-  setTimeout(() => {
-    if (bot && bot.entity) {
-        bot.chat(`/register ${config.password} ${config.password}`);
-    }
-  }, 1500);
-  setTimeout(() => {
-    if (bot && bot.entity) {
-        bot.chat(`/login ${config.password}`);
-    }
-  }, 3500);
-}
-
-function handleAuthPrompt(message) {
-  if (!config.autoLogin || !config.password) return;
-  const normalized = String(message).toLowerCase().replace(/\u00a7[0-9a-fk-or]/gi, '');
-  if (normalized.includes("ro'yxatdan") || normalized.includes('register')) {
-    setTimeout(() => { if (bot && bot.entity) bot.chat(`/register ${config.password} ${config.password}`) }, 500);
-  } else if (normalized.includes('login') || normalized.includes('kirish')) {
-    setTimeout(() => { if (bot && bot.entity) bot.chat(`/login ${config.password}`) }, 500);
+class BotState {
+  constructor(botConfig) {
+    this.botConfig = botConfig;
+    this.bot = null;
+    this.isWorking = false;
+    this.farmInterval = null;
+    this.reconnectTimer = null;
+    this.blacklistedSpots = new Map(); // Planter uchun vaqtinchalik xato bergan joylar
   }
-}
 
-async function farmLoop() {
-  if (!bot || !bot.entity || isWorking) return;
-  
-  try {
-    const cocoaItemId = bot.registry.itemsByName.cocoa_beans?.id;
-    if (!cocoaItemId) return;
+  log(msg) {
+    console.log(`[${new Date().toISOString()}] [${this.botConfig.username} | ${this.botConfig.role.toUpperCase()}] ${msg}`);
+  }
 
-    // Inventarni tekshirish (faqat kakao loviyalari sonini sanaymiz)
-    const emptySlots = bot.inventory.emptySlotCount();
-    const cocoaBeansItems = bot.inventory.items().filter(item => item.type === cocoaItemId);
-    const totalCocoaCount = cocoaBeansItems.reduce((acc, item) => acc + item.count, 0);
-
-    // Agar bo'sh joy kam qolsa (yoki umuman qolmasa) va yetarlicha hosil yig'ilgan bo'lsa
-    if (emptySlots <= 5 && totalCocoaCount > 64) {
-        if (!chestPos) {
-           log("Inventar to'lmoqda, lekin sandiq kordinatasi belgilanmagan! O'yin ichida '!setchest' deb yozing.");
-           return;
-        }
-
-        isWorking = true;
-        log("Inventar to'ldi, sandiqqa borilmoqda...");
-        
-        // 1. Sandiqqa borish
-        const chestGoal = new goals.GoalNear(chestPos.x, chestPos.y, chestPos.z, 1);
-        await bot.pathfinder.goto(chestGoal);
-
-        let targetChestBlock = bot.blockAt(chestPos);
-        
-        // Agar kiritilgan kordinatada to'g'ridan-to'g'ri sandiq bo'lmasa, atrofdan qidirib ko'ramiz
-        // (Masalan foydalanuvchi sandiqni emas, o'zining kordinatasini bergan bo'lsa)
-        if (!targetChestBlock || !['chest', 'trapped_chest', 'barrel'].includes(targetChestBlock.name)) {
-            const chestIds = ['chest', 'trapped_chest', 'barrel'].map(name => bot.registry.blocksByName[name]?.id).filter(id => id !== undefined);
-            targetChestBlock = bot.findBlock({ matching: chestIds, maxDistance: 4, point: chestPos });
-        }
-
-        if (!targetChestBlock) {
-            const currentBlock = bot.blockAt(chestPos);
-            log(`Belgilangan kordinatada sandiq topilmadi! Siz yozgan kordinatada aslida: ${currentBlock ? currentBlock.name : "bo'shliq (air)"} joylashgan.`);
-            isWorking = false;
-            return;
-        }
-
-        // 2. Sandiqni ochish va narsalarni solish
-        const chest = await bot.openContainer(targetChestBlock);
-        
-        let kept = 0;
-        // Inventardagi barcha cocoa beanlarni tekshiramiz
-        for (const item of bot.inventory.items()) {
-            if (item.type === cocoaItemId) {
-                if (kept >= 64) {
-                    // Agar 64 ta zaxira yig'ilgan bo'lsa, qolganini to'liq solamiz
-                    await chest.deposit(item.type, null, item.count).catch(() => {});
-                } else if (kept + item.count > 64) {
-                    // Agar bu stakdan faqat bir qismi zaxira uchun kerak bo'lsa
-                    const toDeposit = item.count - (64 - kept);
-                    kept = 64;
-                    if (toDeposit > 0) {
-                        await chest.deposit(item.type, null, toDeposit).catch(() => {});
-                    }
-                } else {
-                    // Zaxira hali 64 ga yetmagan, bu stakni to'liq olib qolamiz
-                    kept += item.count;
-                }
-            }
-        }
-        
-        await chest.close();
-        log("Hosil sandiqqa joylandi, ish davom etmoqda.");
-        isWorking = false;
-        return; // Keyingi loopgacha kutamiz
-    }
-
-    const cocoaId = bot.registry.blocksByName.cocoa?.id;
-    if (!cocoaId) return;
-
-    // Atrofdagi barcha cocoa bloklarini qidiramiz (radius: 30)
-    const blocks = bot.findBlocks({
-      matching: cocoaId,
-      maxDistance: 30,
-      count: 200
+  start() {
+    this.clearReconnect();
+    
+    this.bot = mineflayer.createBot({
+      host: config.host,
+      port: config.port,
+      username: this.botConfig.username,
+      version: config.version,
+      auth: config.auth
     });
 
-    if (blocks.length === 0) return;
+    this.bot.loadPlugin(pathfinder);
 
-    // Eng yaqinini tanlash uchun masofa bo'yicha saralaymiz
-    const botPos = bot.entity.position;
-    blocks.sort((a, b) => a.distanceTo(botPos) - b.distanceTo(botPos));
-
-    let targetPos = null;
-    let targetBlock = null;
-
-    // Faqat to'liq pishganlarini (age = 2) ajratib olamiz
-    for (const pos of blocks) {
-      const block = bot.blockAt(pos);
-      if (block && block.getProperties() && Number(block.getProperties().age) === 2) {
-        targetPos = pos;
-        targetBlock = block;
-        break; // Eng yaqin pishganini topdik
+    this.bot.once('spawn', () => {
+      const movements = new Movements(this.bot);
+      if (this.bot.registry.blocksByName.cocoa) {
+          movements.blocksToAvoid.add(this.bot.registry.blocksByName.cocoa.id);
       }
-    }
+      movements.canDig = false; // Hosilni tasodifan buzmasligi uchun umumiy qazishni o'chiramiz
+      this.bot.pathfinder.setMovements(movements);
 
-    if (!targetBlock) return; // Hozircha pishgan hosil yo'q
+      this.log(`Serverga ulandi.`);
+      inventoryViewer(this.bot, { port: this.botConfig.port });
+      this.log(`Web Inventar ishga tushdi: http://localhost:${this.botConfig.port}`);
 
-    isWorking = true;
+      this.loginIfNeeded();
+      
+      setTimeout(() => {
+        if (this.bot && this.bot.entity) {
+            this.bot.chat('/anarxiya');
+            this.log('/anarxiya buyrug\'i yuborildi.');
+        }
+      }, 1000);
+      
+      if (this.farmInterval) clearInterval(this.farmInterval);
+      this.farmInterval = setInterval(() => this.farmLoop(), 2000);
+    });
 
-    // 1. O'sha hosilning yoniga borish
-    const goal = new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2);
-    await bot.pathfinder.goto(goal);
+    this.bot.on('messagestr', (message) => this.handleAuthPrompt(message));
 
-    // Manzilga yetib kelgach, blok holatini qayta tekshirish
-    const blockToBreak = bot.blockAt(targetPos);
-    if (!blockToBreak || blockToBreak.type !== cocoaId || Number(blockToBreak.getProperties().age) !== 2) {
-      isWorking = false;
-      return;
-    }
-
-    const facing = blockToBreak.getProperties().facing; // Keyin o'rniga ekish uchun kerak bo'ladi
-
-    // 2. Blokni sindirishdan oldin unga qarash va bolta ushlash
-    await bot.lookAt(targetPos.offset(0.5, 0.5, 0.5), true);
-    
-    // Inventardan bolta (axe) qidirib topib, qo'lga olish
-    const axes = ['netherite_axe', 'diamond_axe', 'golden_axe', 'iron_axe', 'stone_axe', 'wooden_axe'];
-    for (const axeName of axes) {
-      const axeItem = bot.inventory.items().find(item => item.name === axeName);
-      if (axeItem) {
-        await bot.equip(axeItem, 'hand');
-        break; // Eng yaxshi boltani ushlab bo'lgach to'xtaydi
+    this.bot.on('kicked', (reason) => {
+      const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);
+      this.log(`Serverdan chiqarildi: ${reasonStr}`);
+      if (reasonStr.includes('ko‘p akkaunt') || reasonStr.includes('ko\\u2018p akkaunt')) {
+          this.log('XATOLIK: IP manzilingizdan ruxsat etilganidan ko\'p akkaunt ochilgan. Reconnect to\'xtatildi.');
+          config.autoReconnect = false;
       }
-    }
+    });
 
-    // DigTime hisoblashda prismarine-block qulab tushmasligi uchun qo'ldagi buyumni oxirgi marta tekshirish
-    if (bot.heldItem && bot.heldItem.enchantments && !Array.isArray(bot.heldItem.enchantments)) {
-        bot.heldItem.enchantments = [];
-    }
+    this.bot.on('error', (error) => {
+      this.log(`Xato: ${error.message}`);
+    });
 
-    // Blokni sindirish (Hosilni yig'ish)
-    await bot.dig(blockToBreak);
-    
-    // Tushgan narsalarni terib olishi uchun ozgina kutamiz
-    await bot.waitForTicks(10);
-
-    // 3. Qayta ekish jarayoni
-    if (!cocoaItemId) {
-      isWorking = false;
-      return;
-    }
-
-    // Inventardan cocoa_beans izlash
-    const hasCocoaBeans = bot.inventory.items().some(item => item.type === cocoaItemId);
-    
-    if (!hasCocoaBeans) {
-      log("Inventarda ekish uchun cocoa beans qolmadi.");
-      isWorking = false;
-      return;
-    }
-
-    // Cocoa beans ni qo'lga olish
-    await bot.equip(cocoaItemId, 'hand');
-
-    // Cocoa qaysi tomonga qarab turganini aniqlash o'rniga, atrofidagi 4 ta blokni tekshiramiz
-    const offsets = [
-      { offset: new Vec3(0, 0, 1), face: new Vec3(0, 0, -1) },
-      { offset: new Vec3(0, 0, -1), face: new Vec3(0, 0, 1) },
-      { offset: new Vec3(1, 0, 0), face: new Vec3(-1, 0, 0) },
-      { offset: new Vec3(-1, 0, 0), face: new Vec3(1, 0, 0) }
-    ];
-
-    let foundLog = null;
-    let foundFace = null;
-
-    for (const { offset, face } of offsets) {
-      const neighborPos = targetPos.plus(offset);
-      const neighborBlock = bot.blockAt(neighborPos);
-      // 'jungle' nomi qatnashgan har qanday blokni qabul qiladi (jungle_log, stripped_jungle_wood, v.k)
-      if (neighborBlock && neighborBlock.name.includes('jungle')) {
-        foundLog = neighborBlock;
-        foundFace = face;
-        break;
+    this.bot.on('end', () => {
+      this.log('Ulanish uzildi.');
+      if (this.farmInterval) {
+          clearInterval(this.farmInterval);
+          this.farmInterval = null;
       }
-    }
+      this.isWorking = false;
+      this.scheduleReconnect();
+    });
+  }
 
-    if (foundLog) {
-      await bot.placeBlock(foundLog, foundFace).catch(err => {
-         // Agar server lag bo'lsa yoki blok qo'yishni bekor qilsa, time-out xatosi chiqadi, buni shunchaki e'tiborsiz qoldiramiz
-         if (err && err.message && err.message.includes('timeout')) return;
-         throw err;
-      });
-      log(`Hosil yig'ildi va qayta ekildi: ${targetPos.x}, ${targetPos.y}, ${targetPos.z}`);
-    } else {
-      log(`Orqa tomondan jungle log topilmadi, ekish bekor qilindi.`);
-    }
+  loginIfNeeded() {
+    if (!config.autoLogin || !config.password) return;
+    setTimeout(() => { if (this.bot && this.bot.entity) this.bot.chat(`/register ${config.password} ${config.password}`); }, 1500);
+    setTimeout(() => { if (this.bot && this.bot.entity) this.bot.chat(`/login ${config.password}`); }, 3500);
+  }
 
-  } catch (error) {
-    if (error.name !== 'NoPath') {
-      log(`Xatolik: ${error.stack || error.message}`);
-      // Agar enchantments xatosi bersa, qo'ldagi qurolni otib yuboramiz
-      if (error.message && (error.message.includes('enchantments.concat') || error.message.includes('enchantments is not iterable'))) {
-        log("Enchantments xatosi aniqlandi! Qo'ldagi nosoz qurol otib yuborilmoqda...");
-        if (bot.heldItem) {
-          bot.tossStack(bot.heldItem).catch(err => log(`Qurolni otishda xatolik: ${err.message}`));
+  handleAuthPrompt(message) {
+    if (!config.autoLogin || !config.password) return;
+    const normalized = String(message).toLowerCase().replace(/\u00a7[0-9a-fk-or]/gi, '');
+    if (normalized.includes("ro'yxatdan") || normalized.includes('register')) {
+      setTimeout(() => { if (this.bot && this.bot.entity) this.bot.chat(`/register ${config.password} ${config.password}`); }, 500);
+    } else if (normalized.includes('login') || normalized.includes('kirish')) {
+      setTimeout(() => { if (this.bot && this.bot.entity) this.bot.chat(`/login ${config.password}`); }, 500);
+    }
+  }
+
+  async doChestInteraction(action) {
+      if (!chestPos) {
+          this.log(`Sandiq kordinatasi belgilanmagan! (!setchest yozing) Shuning uchun ${action} bekor qilindi.`);
+          return false;
+      }
+
+      this.log(`Sandiqqa borilmoqda (${action})...`);
+      const chestGoal = new goals.GoalNear(chestPos.x, chestPos.y, chestPos.z, 1);
+      await this.bot.pathfinder.goto(chestGoal);
+
+      let targetChestBlock = this.bot.blockAt(chestPos);
+      const chestIds = ['chest', 'trapped_chest', 'barrel'].map(name => this.bot.registry.blocksByName[name]?.id).filter(id => id !== undefined);
+      
+      if (!targetChestBlock || !chestIds.includes(targetChestBlock.type)) {
+          targetChestBlock = this.bot.findBlock({ matching: chestIds, maxDistance: 4, point: chestPos });
+      }
+
+      if (!targetChestBlock) {
+          this.log(`Belgilangan kordinatada sandiq topilmadi!`);
+          return false;
+      }
+
+      const chest = await this.bot.openContainer(targetChestBlock);
+      const cocoaItemId = this.bot.registry.itemsByName.cocoa_beans?.id;
+
+      if (action === 'deposit') {
+          for (const item of this.bot.inventory.items()) {
+              if (item.type === cocoaItemId) {
+                  await chest.deposit(item.type, null, item.count).catch(() => {});
+              }
+          }
+          this.log("Hosil sandiqqa to'liq joylandi.");
+      } else if (action === 'withdraw') {
+          const chestCocoa = chest.items().filter(item => item.type === cocoaItemId);
+          const totalInChest = chestCocoa.reduce((acc, item) => acc + item.count, 0);
+          
+          if (totalInChest > 0) {
+              const toWithdraw = Math.min(64, totalInChest); // Ko'pi bilan bir stak (64) oladi
+              await chest.withdraw(cocoaItemId, null, toWithdraw).catch(err => {
+                  this.log(`Sandiqdan olishda xatolik: ${err.message}`);
+              });
+              this.log(`Sandiqdan ${toWithdraw} ta cocoa beans olindi.`);
+          } else {
+              this.log("Sandiqda cocoa beans yo'q, kutilmoqda...");
+          }
+      }
+      
+      await chest.close();
+      return true;
+  }
+
+  async farmLoop() {
+    if (!this.bot || !this.bot.entity || this.isWorking) return;
+    
+    try {
+      const cocoaItemId = this.bot.registry.itemsByName.cocoa_beans?.id;
+      if (!cocoaItemId) return;
+
+      const cocoaBeansItems = this.bot.inventory.items().filter(item => item.type === cocoaItemId);
+      const totalCocoaCount = cocoaBeansItems.reduce((acc, item) => acc + item.count, 0);
+      const emptySlots = this.bot.inventory.emptySlotCount();
+
+      // ==========================================
+      // YIG'IB OLUVCHI (HARVESTER) MANTIQ
+      // ==========================================
+      if (this.botConfig.role === 'harvester') {
+          // Agar joy tugasa yoki ko'p yig'ilib qolsa sandiqqa to'kadi
+          if (emptySlots <= 5 || totalCocoaCount >= 128) {
+              this.isWorking = true;
+              await this.doChestInteraction('deposit');
+              this.isWorking = false;
+              return;
+          }
+
+          const cocoaId = this.bot.registry.blocksByName.cocoa?.id;
+          if (!cocoaId) return;
+
+          const blocks = this.bot.findBlocks({ matching: cocoaId, maxDistance: 30, count: 200 });
+          if (blocks.length === 0) return;
+
+          const botPos = this.bot.entity.position;
+          blocks.sort((a, b) => a.distanceTo(botPos) - b.distanceTo(botPos));
+
+          let targetPos = null;
+          let targetBlock = null;
+
+          // Faqat pishganini (age = 2) qidirish
+          for (const pos of blocks) {
+            const block = this.bot.blockAt(pos);
+            if (block && block.getProperties() && Number(block.getProperties().age) === 2) {
+              targetPos = pos;
+              targetBlock = block;
+              break;
+            }
+          }
+
+          if (!targetBlock) return; // Pishgani yo'q
+
+          this.isWorking = true;
+          const goal = new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2);
+          await this.bot.pathfinder.goto(goal);
+
+          const blockToBreak = this.bot.blockAt(targetPos);
+          if (blockToBreak && blockToBreak.type === cocoaId && Number(blockToBreak.getProperties().age) === 2) {
+              await this.bot.lookAt(targetPos.offset(0.5, 0.5, 0.5), true);
+              
+              const axes = ['netherite_axe', 'diamond_axe', 'golden_axe', 'iron_axe', 'stone_axe', 'wooden_axe'];
+              for (const axeName of axes) {
+                const axeItem = this.bot.inventory.items().find(item => item.name === axeName);
+                if (axeItem) {
+                  await this.bot.equip(axeItem, 'hand');
+                  break;
+                }
+              }
+
+              // Nosoz qurol xatosini oldini olish
+              if (this.bot.heldItem && this.bot.heldItem.enchantments && !Array.isArray(this.bot.heldItem.enchantments)) {
+                  this.bot.heldItem.enchantments = [];
+              }
+              await this.bot.dig(blockToBreak);
+              await this.bot.waitForTicks(10); // Buyumni yerdan ko'tarishga ulgurishi uchun ozgina kutish
+          }
+          this.isWorking = false;
+      } 
+      
+      // ==========================================
+      // EKUVCHI (PLANTER) MANTIQ
+      // ==========================================
+      else if (this.botConfig.role === 'planter') {
+          // Urug'i qolmasa sandiqdan oladi
+          if (totalCocoaCount === 0) {
+              this.isWorking = true;
+              await this.doChestInteraction('withdraw');
+              this.isWorking = false;
+              return;
+          }
+
+          const logIds = ['jungle_log', 'jungle_wood', 'stripped_jungle_log', 'stripped_jungle_wood']
+              .map(name => this.bot.registry.blocksByName[name]?.id)
+              .filter(id => id !== undefined);
+
+          if (logIds.length === 0) return;
+
+          const logBlocks = this.bot.findBlocks({ matching: logIds, maxDistance: 30, count: 200 });
+          if (logBlocks.length === 0) return;
+
+          const botPos = this.bot.entity.position;
+          logBlocks.sort((a, b) => a.distanceTo(botPos) - b.distanceTo(botPos));
+
+          const offsets = [
+              { offset: new Vec3(0, 0, 1), face: new Vec3(0, 0, -1) },
+              { offset: new Vec3(0, 0, -1), face: new Vec3(0, 0, 1) },
+              { offset: new Vec3(1, 0, 0), face: new Vec3(-1, 0, 0) },
+              { offset: new Vec3(-1, 0, 0), face: new Vec3(1, 0, 0) }
+          ];
+
+          let targetSpot = null;
+          let targetLog = null;
+          let placeFace = null;
+
+          const now = Date.now();
+
+          // Bo'sh (air) joylarni topish
+          for (const pos of logBlocks) {
+              const logBlock = this.bot.blockAt(pos);
+              for (const { offset, face } of offsets) {
+                  const airPos = pos.plus(offset);
+                  const spotKey = `${airPos.x},${airPos.y},${airPos.z}`;
+                  
+                  // Blacklistdagi nosoz joylarni 30 soniya o'tkazib yuborish
+                  if (this.blacklistedSpots.has(spotKey) && now - this.blacklistedSpots.get(spotKey) < 30000) {
+                      continue;
+                  }
+
+                  const airBlock = this.bot.blockAt(airPos);
+                  if (airBlock && (airBlock.name === 'air' || airBlock.name === 'cave_air')) {
+                      targetSpot = airPos;
+                      targetLog = logBlock;
+                      placeFace = face;
+                      break;
+                  }
+              }
+              if (targetSpot) break;
+          }
+
+          if (!targetSpot) return; // Bo'sh joy topilmadi
+
+          this.isWorking = true;
+          const goal = new goals.GoalNear(targetSpot.x, targetSpot.y, targetSpot.z, 2);
+          await this.bot.pathfinder.goto(goal);
+          
+          try {
+              await this.bot.equip(cocoaItemId, 'hand');
+              
+              const checkAir = this.bot.blockAt(targetSpot);
+              if (checkAir && (checkAir.name === 'air' || checkAir.name === 'cave_air')) {
+                  await this.bot.placeBlock(targetLog, placeFace);
+                  // this.log(`Hosil ekildi.`);
+              }
+          } catch (err) {
+              if (err && err.message && !err.message.includes('timeout')) {
+                  this.log(`Ekishda xatolik: ${err.message}`);
+              }
+              // Agar ushbu kordinataga ekib bo'lmasa blacklitga qo'shamiz
+              const spotKey = `${targetSpot.x},${targetSpot.y},${targetSpot.z}`;
+              this.blacklistedSpots.set(spotKey, Date.now());
+          }
+          this.isWorking = false;
+      }
+
+    } catch (error) {
+      if (error.name !== 'NoPath') {
+        this.log(`Xatolik: ${error.stack || error.message}`);
+        // Nosoz enchantments xatosi bo'lsa qurolni tashlab yuborish
+        if (error.message && (error.message.includes('enchantments.concat') || error.message.includes('enchantments is not iterable'))) {
+          if (this.bot.heldItem) {
+            this.bot.tossStack(this.bot.heldItem).catch(() => {});
+          }
         }
       }
+      this.isWorking = false;
     }
-  } finally {
-    isWorking = false;
+  }
+
+  scheduleReconnect() {
+    if (!config.autoReconnect || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.log('Qayta ulanishga harakat qilinmoqda...');
+      this.start();
+    }, config.reconnectDelayMs);
+  }
+
+  clearReconnect() {
+    if (!this.reconnectTimer) return;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 }
 
-function scheduleReconnect() {
-  if (!config.autoReconnect || reconnectTimer) return;
-  reconnectTimer = setTimeout(() => {
-    log('Qayta ulanishga harakat qilinmoqda...');
-    startBot();
-  }, config.reconnectDelayMs);
+// ==========================================
+// BARCHA BOTLARNI KETMA-KET ISHGA TUSHIRISH
+// ==========================================
+async function startAllBots() {
+    for (let i = 0; i < BOTS_CONFIG.length; i++) {
+        const botConfig = BOTS_CONFIG[i];
+        console.log(`[Tizim] Ishga tushirilmoqda: ${botConfig.username} (${botConfig.role})`);
+        
+        const botState = new BotState(botConfig);
+        activeBots.set(botConfig.username, botState);
+        botState.start();
+
+        if (i < BOTS_CONFIG.length - 1) {
+            console.log(`[Tizim] Keyingi bot ulanishi uchun 6 soniya kutilmoqda (Anti-Spam himoyasi uchun)...`);
+            await new Promise(resolve => setTimeout(resolve, 6000));
+        }
+    }
 }
 
-function clearReconnect() {
-  if (!reconnectTimer) return;
-  clearTimeout(reconnectTimer);
-  reconnectTimer = null;
-}
-
-// Terminaldan chatga yozish uchun
+// Terminaldan boshqarish (Chat yozish, !setchest buyrug'i)
 const readline = require('readline');
 const rl = readline.createInterface({
   input: process.stdin,
@@ -404,43 +429,59 @@ const rl = readline.createInterface({
 });
 
 process.on('uncaughtException', (err) => {
-  log(`Tizim xatosi ushlandi: ${err.message}`);
+  console.log(`[Tizim xatosi ushlandi]: ${err.message}`);
 });
 
 rl.on('line', (line) => {
   const message = line.trim();
   if (message) {
-    if (bot && bot.entity) {
-      if (message.startsWith('!setchest')) {
-        const parts = message.split(/\s+/);
-        if (parts.length === 4) {
-          const x = parseInt(parts[1]);
-          const y = parseInt(parts[2]);
-          const z = parseInt(parts[3]);
-          if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-            saveChestPos(new Vec3(x, y, z));
-            log(`Sandiq kordinatasi o'rnatildi: ${x}, ${y}, ${z}`);
-            return;
+    if (message.startsWith('!setchest')) {
+      const parts = message.split(/\s+/);
+      let newPos = null;
+      if (parts.length === 4) {
+        const x = parseInt(parts[1]);
+        const y = parseInt(parts[2]);
+        const z = parseInt(parts[3]);
+        if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
+          newPos = new Vec3(x, y, z);
+        }
+      }
+      
+      if (!newPos) {
+          let anyBot = null;
+          for (const bs of activeBots.values()) {
+              if (bs.bot && bs.bot.entity) {
+                  anyBot = bs.bot; break;
+              }
           }
-        }
-        
-        const chestIds = ['chest', 'trapped_chest', 'barrel'].map(name => bot.registry.blocksByName[name]?.id).filter(id => id !== undefined);
-        const targetBlock = bot.findBlock({ matching: chestIds, maxDistance: 6 });
-        if (targetBlock) {
-           saveChestPos(targetBlock.position);
-           log(`Sandiq topildi va kordinatasi saqlandi: ${chestPos.x}, ${chestPos.y}, ${chestPos.z}`);
-        } else {
-           log("Yaqin atrofda sandiq topilmadi. Yoki aniq kordinata bering: !setchest x y z");
-        }
-        return;
+          if (anyBot) {
+              const chestIds = ['chest', 'trapped_chest', 'barrel'].map(name => anyBot.registry.blocksByName[name]?.id).filter(id => id !== undefined);
+              const targetBlock = anyBot.findBlock({ matching: chestIds, maxDistance: 6 });
+              if (targetBlock) {
+                  newPos = targetBlock.position;
+              }
+          }
       }
 
-      bot.chat(message);
-      log(`Terminaldan: ${message}`);
-    } else {
-      log('Bot hali serverga ulanmagan.');
+      if (newPos) {
+          saveChestPos(newPos);
+          console.log(`[Tizim] Sandiq kordinatasi o'rnatildi: ${newPos.x}, ${newPos.y}, ${newPos.z}`);
+      } else {
+          console.log("[Tizim] Sandiq topilmadi yoki xato kiritildi. Aniq kordinata yozing: '!setchest x y z'");
+      }
+      return;
     }
+
+    let sent = false;
+    for (const bs of activeBots.values()) {
+        if (bs.bot && bs.bot.entity) {
+            bs.bot.chat(message);
+            bs.log(`Terminaldan yuborildi: ${message}`);
+            sent = true;
+        }
+    }
+    if (!sent) console.log('[Tizim] Hali hech bir bot serverga ulanmagan.');
   }
 });
 
-startBot();
+startAllBots();
