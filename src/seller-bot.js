@@ -39,10 +39,10 @@ function log(message) {
 const config = {
   host: process.env.MC_HOST || 'localhost',
   port: toNumber(process.env.MC_PORT, 25565),
-  username: process.env.MC_SELLER_USERNAME || 'lxz_404', // Sotuvchi uchun alohida ism
+  username: process.env.MC_SELLER_USERNAME || 'lxz_401', // Sotuvchi uchun alohida ism
   version: parseVersion(process.env.MC_VERSION),
   auth: process.env.MC_AUTH || 'offline',
-  password: process.env.MC_SELLER_PASSWORD || process.env.MC_PASSWORD || '',
+  password: process.env.MC_SELLER_PASSWORD || process.env.MC_PASSWORD || 'bobo',
   autoLogin: process.env.AUTO_LOGIN !== 'false',
   autoReconnect: process.env.AUTO_RECONNECT !== 'false',
   reconnectDelayMs: toNumber(process.env.RECONNECT_DELAY_MS, 5000),
