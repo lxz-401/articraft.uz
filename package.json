@@ -4,15 +4,17 @@
   "private": true,
   "packageManager": "pnpm@10.24.0",
   "description": "Minecraft server uchun oddiy mineflayer bot.",
-  "main": "src/bot.js",
+  "main": "src/manager.js",
   "scripts": {
-    "start": "node src/bot.js"
+    "start": "node src/manager.js"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.0",
     "canvas": "^3.2.3",
     "mineflayer": "^4.37.1",
     "mineflayer-pathfinder": "^2.4.5",
     "mineflayer-web-inventory": "^1.8.5",
+    "node-telegram-bot-api": "^0.66.0",
     "prismarine-viewer": "^1.33.0",
     "vec3": "^0.2.0",
     "ws": "^8.21.0"

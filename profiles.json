@@ -1,0 +1,52 @@
+[
+  {
+    "id": "main_panel",
+    "name": "Main Panel Bot",
+    "role": "panel",
+    "host": "articraft.uz",
+    "port": 25565,
+    "username": "ArticraftBot",
+    "password": "",
+    "version": "1.21.1",
+    "auth": "offline",
+    "autoLogin": true,
+    "autoReconnect": true,
+    "reconnectDelayMs": 5000,
+    "webPort": 3000,
+    "viewerPort": 3007,
+    "viewerEnabled": true,
+    "enabled": false
+  },
+  {
+    "id": "cocoa_harvester",
+    "name": "Cocoa Harvester",
+    "role": "harvester",
+    "host": "articraft.uz",
+    "port": 25565,
+    "username": "l0rd1x",
+    "password": "",
+    "version": "1.21.1",
+    "auth": "offline",
+    "autoLogin": true,
+    "autoReconnect": true,
+    "reconnectDelayMs": 5000,
+    "webPort": 3008,
+    "enabled": false
+  },
+  {
+    "id": "seller_farmer",
+    "name": "Seller Farmer",
+    "role": "farmer",
+    "host": "articraft.uz",
+    "port": 25565,
+    "username": "lxz_401",
+    "password": "",
+    "version": "1.21.1",
+    "auth": "offline",
+    "autoLogin": true,
+    "autoReconnect": true,
+    "reconnectDelayMs": 5000,
+    "webPort": 3010,
+    "enabled": false
+  }
+]

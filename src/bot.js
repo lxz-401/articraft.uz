@@ -3,8 +3,12 @@ const http = require('http');
 const path = require('path');
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
-const { mineflayer: mineflayerViewer } = require('prismarine-viewer');
+const { mineflayer: mineflayerViewer } = (() => {
+  try { return require('prismarine-viewer'); }
+  catch { return { mineflayer: null }; }
+})();
 const WebSocket = require('ws');
+const tg = require('./telegram-bot');
 
 loadEnvFile(path.join(__dirname, '..', '.env'));
 
@@ -24,7 +28,9 @@ const config = {
   webHost: process.env.WEB_HOST || '127.0.0.1',
   webPort: toNumber(process.env.WEB_PORT, 3000),
   viewerEnabled: process.env.VIEWER_ENABLED !== 'false',
-  viewerPort: toNumber(process.env.VIEWER_PORT, 3007)
+  viewerPort: toNumber(process.env.VIEWER_PORT, 3007),
+  telegramEnabled: process.env.TELEGRAM_ENABLED !== 'false',
+  telegramForwardChat: process.env.TELEGRAM_FORWARD_CHAT !== 'false'
 };
 
 let bot = null;
@@ -41,6 +47,7 @@ let viewerStarted = false;
 let controlReleaseTimers = new Map();
 const chatHistory = [];
 const maxChatHistory = 200;
+let lastHealthNotified = false;
 
 const webClients = new Set();
 const webServer = http.createServer(handleWebRequest);
@@ -62,6 +69,85 @@ wsServer.on('connection', socket => {
 webServer.listen(config.webPort, config.webHost, () => {
   log(`Web panel: http://${config.webHost}:${config.webPort}`);
 });
+
+// ─── Telegram bot ishga tushirish ─────────────────────────────────────────────
+tg.initTelegramBot({
+  getBot: () => bot,
+  getStatusFn: getStatus,
+  execFn: execTelegramCommand
+});
+
+/**
+ * Telegram buyruqlarini bajaruvchi markaziy funksiya.
+ */
+function execTelegramCommand(action, args) {
+  switch (action) {
+    case 'chat':
+      if (!isBotSpawned()) break;
+      safeChat(args[0] || '');
+      addChatMessage('panel', `<${config.username}> ${args[0] || ''}`);
+      break;
+
+    case 'come':
+      if (!isBotSpawned()) break;
+      goToPlayer(config.owner || '');
+      break;
+
+    case 'follow':
+      if (!isBotSpawned()) break;
+      followPlayer(config.owner || '');
+      break;
+
+    case 'stop':
+      if (!isBotSpawned()) break;
+      bot.pathfinder.stop();
+      break;
+
+    case 'stop_all':
+      if (!isBotSpawned()) break;
+      stopAllControls();
+      bot.pathfinder.stop();
+      break;
+
+    case 'jump':
+      if (!isBotSpawned()) break;
+      bot.setControlState('jump', true);
+      setTimeout(() => { if (bot) bot.setControlState('jump', false); }, 500);
+      break;
+
+    case 'move': {
+      if (!isBotSpawned()) break;
+      const [direction, durationMs] = args;
+      bot.setControlState(direction, true);
+      setTimeout(() => { if (bot) bot.setControlState(direction, false); }, durationMs || 1000);
+      break;
+    }
+
+    case 'control': {
+      if (!isBotSpawned()) break;
+      const [ctrl, active] = args;
+      bot.setControlState(ctrl, active);
+      break;
+    }
+
+    case 'inventory': {
+      const chatId = args[0];
+      tg.sendInventoryToChat(chatId, latestInventory);
+      break;
+    }
+
+    case 'reconnect':
+      if (bot) {
+        bot.end();
+      } else {
+        startBot();
+      }
+      break;
+
+    default:
+      break;
+  }
+}
 
 function startBot() {
   clearReconnect();
@@ -116,6 +202,8 @@ function startBot() {
     startViewer();
     loginIfNeeded();
     startAntiAfk();
+    lastHealthNotified = false;
+    tg.notifyStatus(true, `${config.host}:${config.port} (${bot.username})`);
     safeChat(`Salom! Men ${bot.username}. Buyruqlar uchun !help yozing.`);
 
     setTimeout(() => {
@@ -139,7 +227,18 @@ function startBot() {
   bot.on('heldItemChanged', updateInventory);
   bot.on('windowUpdate', updateInventory);
   bot.on('playerCollect', updateInventory);
-  bot.on('health', broadcastStatus);
+  bot.on('health', () => {
+    broadcastStatus();
+    // HP past bo'lganda Telegram ogohlantirish
+    if (bot && bot.health !== undefined) {
+      if (bot.health < 6 && !lastHealthNotified) {
+        lastHealthNotified = true;
+        tg.notifyLowHealth(bot.health);
+      } else if (bot.health >= 6) {
+        lastHealthNotified = false;
+      }
+    }
+  });
   bot.on('scoreUpdated', broadcastStatus);
   bot.on('scoreRemoved', broadcastStatus);
   bot.on('scoreboardTitleChanged', broadcastStatus);
@@ -158,6 +257,7 @@ function startBot() {
 
     log(`Serverdan chiqarildi: ${lastKickReason}`);
     addChatMessage('system', `Serverdan chiqarildi: ${lastKickReason}`);
+    tg.notifyStatus(false, `Kick: ${lastKickReason}`);
 
     if (stoppedByBotCheck) {
       addChatMessage('system', 'Server bot tekshiruvini talab qildi. Avtomatik qayta ulanish toxtatildi.');
@@ -175,6 +275,7 @@ function startBot() {
     stopAntiAfk();
     broadcastStatus();
     scheduleReconnect();
+    tg.notifyStatus(false, 'Ulanish uzildi.');
   });
 }
 
@@ -331,6 +432,11 @@ function addChatMessage(source, text) {
   if (chatHistory.length > maxChatHistory) chatHistory.shift();
 
   broadcast('chat', entry);
+
+  // Telegram-ga forward qilish (faqat server/system xabarlari)
+  if (config.telegramForwardChat && (source === 'server' || source === 'system')) {
+    tg.forwardChatToTelegram(entry);
+  }
 }
 
 function handleWebRequest(request, response) {
@@ -559,6 +665,12 @@ function handleControl(socket, payload) {
 
 function startViewer() {
   if (!config.viewerEnabled || viewerStarted) return;
+
+  if (!mineflayerViewer) {
+    log('3D viewer: canvas moduli yuklanmadi (Node.js versiyasi mos kelmadi). Viewer o\'chirildi.');
+    addChatMessage('system', '3D viewer mavjud emas (canvas binary topilmadi).');
+    return;
+  }
 
   try {
     mineflayerViewer(bot, {
