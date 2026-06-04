@@ -48,5 +48,26 @@
     "reconnectDelayMs": 5000,
     "webPort": 3010,
     "enabled": false
+  },
+  {
+    "id": "farmer_seller",
+    "name": "Farmer & Seller",
+    "role": "farmer",
+    "host": "articraft.uz",
+    "port": 25565,
+    "username": "ArticraftBot",
+    "password": "",
+    "version": "1.21.1",
+    "auth": "offline",
+    "autoLogin": true,
+    "autoReconnect": true,
+    "reconnectDelayMs": 5000,
+    "stopOnBotCheckKick": true,
+    "enabled": true,
+    "stats": {
+      "harvested": 0,
+      "planted": 0,
+      "sold_cycles": 0
+    }
   }
 ]

@@ -10,6 +10,7 @@ const { Vec3 } = require('vec3');
 const profiles = require('./profiles');
 const { formatPosition, formatReason, stripControlCodes, normalizeQuotes } = require('./utils');
 const { executeAutoSellFlow } = require('./auto-sell');
+const { CropManager } = require('./farming/crop-manager');
 
 // ─── Konstantalar ─────────────────────────────────────────────────────────────
 
@@ -80,6 +81,13 @@ class BotInstance extends EventEmitter {
 
     // Qayta ulanish urinishlari
     this.connectionFailures = 0;
+
+    // CropManager (bot spawn'dan keyin yaratiladi)
+    this.cropManager = null;
+
+    // Yoqilgan ekin turlari (.env yoki profile'dan)
+    this.farmingCrops = profile.farmingCrops ||
+      (process.env.FARMING_CROPS ? process.env.FARMING_CROPS.split(',').map(c => c.trim()) : null);
   }
 
   // ─── Logging ───────────────────────────────────────────────────────────────
@@ -184,7 +192,7 @@ class BotInstance extends EventEmitter {
     if (this.bot.registry.blocksByName.cocoa) {
       movements.blocksToAvoid.add(this.bot.registry.blocksByName.cocoa.id);
     }
-    movements.canDig = false; // Tasodifan blok qazib tashlaslik uchun
+    movements.canDig = false;
     this.bot.pathfinder.setMovements(movements);
 
     // Entity filterlash
@@ -207,11 +215,18 @@ class BotInstance extends EventEmitter {
       }
     }, 1_500);
 
+    // CropManager yaratish (spawn'dan keyin, registry tayyor bo'lgach)
+    this.cropManager = new CropManager(
+      this.bot,
+      this.farmingCrops,
+      this.log.bind(this)
+    );
+
     // Farming loopi
     this._stopFarmInterval();
     this.farmInterval = setInterval(() => this._farmerLoop(), 2_000);
 
-    // Blacklist tozalash (vaqt o'tgan yozuvlarni)
+    // Blacklist tozalash
     this._startBlacklistCleanup();
 
     this.emit('started');
@@ -418,13 +433,7 @@ class BotInstance extends EventEmitter {
   }
 
   async _farmCycle() {
-    const { registry, inventory, entity } = this.bot;
-
-    const cocoaItemId = registry.itemsByName.cocoa_beans?.id;
-    if (!cocoaItemId) return;
-
-    const cocoaBlockId = registry.blocksByName.cocoa?.id;
-    if (!cocoaBlockId) return;
+    const { inventory } = this.bot;
 
     // Inventar to'la — avto-sotuv
     const emptySlots = inventory.emptySlotCount();
@@ -441,12 +450,22 @@ class BotInstance extends EventEmitter {
       return;
     }
 
-    // 1. Pishgan cocoa yig'ish
-    const harvested = await this._harvestCocoa(cocoaBlockId);
-    if (harvested) return;
+    if (!this.cropManager) return;
 
-    // 2. Cocoa ekish
-    await this._plantCocoa(cocoaItemId);
+    // 1. Pishgan ekinlarni yig'ish
+    const harvested = await this.cropManager.harvestAll();
+    if (harvested) {
+      this.stats.harvested += 1;
+      this._saveStats();
+      return;
+    }
+
+    // 2. Bo'sh joylarga ekish
+    const planted = await this.cropManager.plantAll();
+    if (planted) {
+      this.stats.planted += 1;
+      this._saveStats();
+    }
   }
 
   async _harvestCocoa(cocoaBlockId) {

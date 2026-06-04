@@ -1,0 +1,9 @@
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "node src/worker.js"]
+
+[[ports]]
+localPort = 3000
+externalPort = 80

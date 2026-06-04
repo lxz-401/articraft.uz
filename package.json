@@ -6,7 +6,10 @@
   "description": "Minecraft server uchun oddiy mineflayer bot.",
   "main": "src/manager.js",
   "scripts": {
-    "start": "node src/manager.js"
+    "start": "node src/manager.js",
+    "start:central": "CENTRAL_MODE=true node src/manager.js",
+    "start:worker": "node src/worker.js",
+    "dev": "node src/manager.js"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.0",

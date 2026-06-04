@@ -1,134 +1,168 @@
-# ArtiCRAFT Minecraft bot
+# ArtiCRAFT Minecraft Bot
 
-Bu loyiha `mineflayer` orqali `articraft.uz` Minecraft serveriga ulanadigan oddiy bot.
+Multi-bot Minecraft farming bot, Telegram orqali boshqariladigan. Bitta IP limitini chetlab o'tish uchun botlarni turli serverlarda ishga tushirish imkonini beradi.
 
-Default sozlamalar `articraft.uz:25565`, Java `1.21.11`, `offline` auth uchun tayyorlangan.
+## Arxitektura
+
+```
+Ubuntu PC (24/7)
+├── Central Server (CENTRAL_MODE=true)
+│   ├── Telegram Bot ← siz boshqarasiz
+│   ├── WebSocket Server (port 8765)
+│   └── HTTP API Server (port 8766)
+│   └── Cloudflare Tunnel (wss://xxx.trycloudflare.com)
+│
+Replit / Railway / Render
+├── Worker #1 (CENTRAL_MODE=false, WORKER_ID=replit_1)
+│   └── Bot Account: Account1 → articraft.uz
+└── Worker #2 (CENTRAL_MODE=false, WORKER_ID=railway_1)
+    └── Bot Account: Account2 → articraft.uz
+```
 
 ## O'rnatish
 
-1. `.env.example` faylidan `.env` yarating.
-2. `.env` ichida server sozlamalarini yozing.
-3. Paketlarni o'rnating:
-
 ```bash
-corepack pnpm install
+git clone <repo-url>
+cd articraft.uz
+pnpm install   # yoki: npm install
+cp .env.example .env
+# .env faylini o'zingizga moslab to'ldiring
 ```
 
-## Ishga tushirish
+## Rejimlar
 
-```bash
-node src/bot.js
-```
+### 1. Central Server (Ubuntu PC'ingizda)
 
-Windows uchun yana qulayroq yo'l:
-
-```powershell
-.\start-bot.cmd
-```
-
-Bot ishga tushgandan keyin panelni brauzerda oching:
-
-```text
-http://127.0.0.1:3000
-```
-
-Panelda server chatini real vaqtda ko'rasiz, pastdagi input orqali chatga xabar yuborasiz, o'ng tomonda bot holati va inventory ko'rinadi.
-
-3D ko'rish oynasi:
-
-- Panelning yuqori qismida bot atrofidagi dunyo 3D ko'rinishda chiqadi.
-- Alohida oynada ochish: `http://127.0.0.1:3007`
-- Bu Minecraft clientdagi shader/HUD bilan bir xil video stream emas; botga yuborilgan chunklar asosida browserda chizilgan viewer.
-
-Inventory boshqarish:
-
-- Backpack yoki Hotbar slotidagi itemni bosing.
-- Keyin ko'chirmoqchi bo'lgan slotni bosing.
-- Armor va offhand slotlari hozircha faqat ko'rish uchun.
-- Bo'sh slotlar ham ko'rinadi, shuning uchun item joylashuvi real slot tartibida chiqadi.
-
-Harakat boshqaruvi:
-
-- Paneldagi tugmalar bilan oldinga, orqaga, chapga, o'ngga, sakrash, sprint va sneak yuboriladi.
-- `Stop` tugmasi barcha control state'larni o'chiradi.
-- `Kamera` sliderlari botning qarash yo'nalishini o'zgartiradi.
-- 3D viewer ustiga bossangiz klaviatura rejimi yoqiladi.
-- `WASD`, `Space`, `Shift`, `Ctrl` ishlaydi.
-- `Esc` klaviatura boshqaruvini o'chiradi.
-
-Container boshqarish:
-
-- Bot chest, ender chest, barrel yoki shulker yonida turgan bo'lishi kerak.
-- Paneldagi `Chest`, `Ender chest`, `Barrel`, `Shulker` tugmalaridan birini bosing.
-- Ochilgan oynadagi container slotlari va bot inventory slotlari ko'rinadi.
-- Item bor slotni tanlab, boshqa slotga bossangiz joyi almashadi.
-- `Yopish` tugmasi ochilgan oynani yopadi.
-
-Serverdagi hamma chestlarni masofadan ko'rish mumkin emas. Minecraft server faqat bot ochgan container oynasidagi itemlarni clientga yuboradi.
-
-## Chat buyruqlari
-
-Bot serverga kirgandan keyin chatdan quyidagilarni yozish mumkin:
-
-- `!help` - buyruqlar ro'yxati
-- `!status` - bot holati
-- `!come` - buyruq bergan o'yinchi yoniga boradi
-- `!follow` - buyruq bergan o'yinchini kuzatadi
-- `!stop` - yurishni to'xtatadi
-- `!jump` - sakraydi
-- `!say salom` - chatga xabar yozadi
-
-`MC_OWNER` to'ldirilsa, bot faqat shu nickname buyruqlarini bajaradi. Bo'sh bo'lsa, hamma buyruq bera oladi.
-
-## Muhim sozlamalar
-
-- `MC_HOST` - server IP yoki domeni, default: `articraft.uz`
-- `MC_PORT` - server porti
-- `MC_USERNAME` - bot nickname
-- `MC_VERSION` - ArtiCRAFT uchun default: `1.21.11`
-- `MC_AUTH` - cracked/offline server uchun `offline`, Microsoft login uchun `microsoft`
-- `MC_PASSWORD` - server `/register` va `/login` paroli. Bo'sh bo'lsa login komandasi yuborilmaydi
-- `AUTO_LOGIN` - `true` bo'lsa bot kirganda `/register` va `/login` yuboradi
-- `AUTO_ANTIAFK` - `true` bo'lsa bot har 45 soniyada sakrab AFK kick ehtimolini kamaytiradi
-- `STOP_ON_BOT_CHECK_KICK` - server bot tekshiruvidan o'tmadi deb kick qilsa, qayta ulanishni to'xtatadi
-- `VIEWER_ENABLED` - 3D ko'rish oynasini yoqadi
-- `VIEWER_PORT` - 3D viewer porti
-
-## ArtiCRAFT uchun tavsiya etilgan `.env`
-
+`.env` faylida:
 ```env
+CENTRAL_MODE=true
+TELEGRAM_BOT_TOKEN=your_token
+TELEGRAM_CHAT_IDS=your_chat_id
+CENTRAL_TOKEN=secret_token_change_this
+CENTRAL_WS_PORT=8765
+CENTRAL_HTTP_PORT=8766
+```
+
+Ishga tushirish:
+```bash
+node src/manager.js
+# yoki:
+npm start
+```
+
+**Cloudflare Tunnel sozlash:**
+```bash
+# cloudflared o'rnatish (Ubuntu)
+curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+sudo dpkg -i cloudflared.deb
+
+# Tunnel ochish
+cloudflared tunnel --url ws://localhost:8765
+# Chiqadigan URL: wss://xxx.trycloudflare.com — bu CENTRAL_WS_URL bo'ladi
+```
+
+### 2. Worker (Replit / Railway / Render)
+
+`.env` faylida:
+```env
+CENTRAL_MODE=false
+WORKER_ID=replit_bot_1
+WORKER_TOKEN=secret_token_change_this   # Central TOKEN bilan bir xil
+CENTRAL_WS_URL=wss://xxx.trycloudflare.com
+CENTRAL_HTTP_URL=https://xxx.trycloudflare.com
+
 MC_HOST=articraft.uz
 MC_PORT=25565
-MC_USERNAME=ArticraftBot
-MC_VERSION=1.21.11
+MC_USERNAME=BotAccount1
+MC_PASSWORD=your_password
+MC_VERSION=1.21.1
 MC_AUTH=offline
-MC_OWNER=SizningNick
-MC_PASSWORD=kuchli_parol
-AUTO_LOGIN=true
-AUTO_ANTIAFK=true
-AUTO_RECONNECT=true
-RECONNECT_DELAY_MS=5000
-STOP_ON_BOT_CHECK_KICK=true
-WEB_HOST=127.0.0.1
-WEB_PORT=3000
-VIEWER_ENABLED=true
-VIEWER_PORT=3007
+
+FARMING_CROPS=cocoa,wheat,carrot,potato
 ```
 
-`MC_OWNER` ni o'z nickname'ingizga almashtiring. Shunda bot chat buyruqlarini faqat sizdan qabul qiladi.
-
-`MC_PASSWORD` bo'sh qolsa bot avtomatik ro'yxatdan o'tmaydi. Bunday holatda paneldagi chat inputiga qo'lda quyidagicha yozing:
-
-```text
-/register parol parol
+Ishga tushirish:
+```bash
+node src/worker.js
 ```
 
-Keyingi kirishda:
+#### Replit uchun:
+- Yangi Replit yarating (Node.js)
+- Repo'ni import qiling
+- Secrets'ga `.env` qiymatlarini qo'shing
+- `Run` bosing
 
-```text
-/login parol
+#### Railway uchun:
+- `railway up` yoki GitHub'dan deploy qiling
+- Environment variables'ni sozlang
+- `Procfile` avtomatik `node src/worker.js` ishlatadi
+
+#### Render uchun:
+- New Web Service → GitHub repo
+- Start Command: `node src/worker.js`
+- Environment variables sozlang
+
+## Telegram Buyruqlari
+
+### Central Mode (multi-bot boshqaruv):
+| Buyruq | Tavsif |
+|--------|--------|
+| `/bots` | Barcha worker'lar ro'yxati |
+| `/bot <id> status` | Aniq bot holati |
+| `/bot <id> start` | Botni ishga tushirish |
+| `/bot <id> stop` | Botni to'xtatish |
+| `/bot <id> restart` | Qayta ishga tushirish |
+| `/bot <id> inventory` | Inventar ro'yxati |
+| `/bot <id> chat <xabar>` | Chatga yozish |
+| `/bot <id> logs` | So'nggi loglar |
+| `/bot <id> stats` | Bot statistikasi |
+| `/allstats` | Barcha botlar umumiy statistikasi |
+
+### Single-Bot Mode:
+| Buyruq | Tavsif |
+|--------|--------|
+| `/status` | Bot holati |
+| `/stats` | Farming statistikasi |
+| `/chat <xabar>` | Chatga yozish |
+| `/inventory` | Inventar |
+| `/stop` | Pathfinder'ni to'xtatish |
+| `/stop_all` | Barcha harakatni to'xtatish |
+| `/jump` | Sakrash |
+| `/forward`, `/back`, `/left`, `/right` | Harakat (1s) |
+| `/sprint`, `/sneak` | Sprint/Sneak toggle |
+| `/reconnect` | Qayta ulash |
+
+## Qo'llab-quvvatlanadigan ekinlar
+
+`FARMING_CROPS` o'zgaruvchisida vergul bilan ajratib ko'rsating:
+
+| Ekin | Config nomi |
+|------|-------------|
+| Kakao | `cocoa` |
+| Bug'doy | `wheat` |
+| Sabzi | `carrot` |
+| Kartoshka | `potato` |
+| Lavlagi | `beetroot` |
+| Tarvuz | `melon` |
+| Qovoq | `pumpkin` |
+| Shakarqamish | `sugarcane` |
+| Bambuk | `bamboo` |
+
+Misol: `FARMING_CROPS=cocoa,wheat,carrot,potato,beetroot`
+
+## Fayl tuzilmasi
+
 ```
-
-## Bot tekshiruvi haqida
-
-Agar server `Вы не успели пройти проверку на бота!` deb kick qilsa, bu serverning anti-bot tekshiruvi. Bot bu tekshiruvni aylanib o'tmaydi. `STOP_ON_BOT_CHECK_KICK=true` bo'lsa, bot qayta-qayta ulanib serverga spam qilmasdan to'xtaydi.
+src/
+├── manager.js          — Asosiy entry point (central/single rejim tanlaydi)
+├── worker.js           — Remote worker entry point
+├── bot-instance.js     — Minecraft bot logikasi
+├── telegram-bot.js     — Telegram bot (single + multi-bot)
+├── central-server.js   — WebSocket + HTTP server
+├── worker-registry.js  — Worker'lar boshqaruvi
+├── auto-sell.js        — /shop GUI orqali sotuv
+├── profiles.js         — Bot profil boshqaruvi
+├── utils.js            — Yordamchi funksiyalar
+└── farming/
+    └── crop-manager.js — Barcha ekin turlari
+```
