@@ -1,177 +1,213 @@
+/**
+ * auto-sell.js
+ * /shop GUI orqali avto-sotuv jarayonini boshqaradi.
+ *
+ * GUI navigatsiya: /shop → (arrow/orqaga) → player_head(SOTUVCHI) → hopper → lime_dye(Yoqish)
+ * Yoqilgandan keyin 3 soniya kutib, o'chirish (gray_dye) bajariladi.
+ */
+
 const { stripControlCodes } = require('./utils');
 
+// ─── Konstantalar ─────────────────────────────────────────────────────────────
+
+const WINDOW_OPEN_TIMEOUT_MS = 12_000;  // /shop oynasi ochilishi uchun maksimal kutish
+const WINDOW_OP_TIMEOUT_MS   = 10_000;  // Har bir oyna amali uchun kutish
+const TICKS_AFTER_OPEN       = 5;       // Oyna ochilgandan keyingi kutish (tick)
+const TICKS_AFTER_CLICK      = 10;      // Har bir click dan keyingi kutish (tick)
+const AUTO_SELL_ON_WAIT_MS   = 3_000;   // Sotish jarayoni davomiyligi
+const MAX_DEPTH              = 2;       // executeAutoSellFlow rekursiv chaqiruv limiti
+
+// ─── Yordamchi: oyna slotlaridan item topish ──────────────────────────────────
+
 /**
- * Toggles the auto-sell feature via the /shop GUI.
- * @param {import('mineflayer').Bot} bot 
- * @param {boolean} turnOn True to turn on, false to turn off.
- * @param {function} log Callback for logging.
+ * Konteyner slotlaridan item topadi (0..inventoryStart-1).
+ * @param {object} window - Mineflayer window ob'ekti
+ * @param {string} itemName - item.name (masalan 'arrow', 'player_head')
+ * @param {string|null} [customNameSubstring] - customName/displayName ichida qidiriladigan matn (UPPERCASE)
+ * @returns {{ item: object, slot: number }|null}
  */
-async function executeAutoSellFlow(bot, turnOn, log = console.log) {
-  return new Promise(async (resolve) => {
-    let currentWindow = null;
-    let timeoutTimer = null;
-    let step = 0;
+function findItem(window, itemName, customNameSubstring = null) {
+  if (!window?.slots) return null;
+  const end = window.inventoryStart ?? window.slots.length;
 
-    const cleanup = () => {
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      bot.removeListener('windowOpen', onWindowOpen);
-      if (currentWindow) {
-        try { bot.closeWindow(currentWindow); } catch (err) {}
-      }
-    };
+  for (let i = 0; i < end; i++) {
+    const item = window.slots[i];
+    if (!item || item.name !== itemName) continue;
 
-    const fail = (msg) => {
-      log(`[AutoSell] Xato: ${msg}`);
+    if (customNameSubstring) {
+      const raw = item.customName || item.displayName || '';
+      const clean = stripControlCodes(String(raw)).toUpperCase();
+      if (!clean.includes(customNameSubstring)) continue;
+    }
+
+    return { item, slot: i };
+  }
+  return null;
+}
+
+// ─── Asosiy funksiya ──────────────────────────────────────────────────────────
+
+/**
+ * /shop orqali avto-sotuv yoqadi yoki o'chiradi.
+ * @param {import('mineflayer').Bot} bot
+ * @param {boolean} turnOn - true = yoqish, false = o'chirish
+ * @param {function} [log] - loglash callback
+ * @param {number} [_depth=0] - rekursiv chaqiruv chuqurligi (ichki foydalanish uchun)
+ * @returns {Promise<boolean>} - Muvaffaqiyatli bo'lsa true
+ */
+async function executeAutoSellFlow(bot, turnOn, log = console.log, _depth = 0) {
+  if (_depth > MAX_DEPTH) {
+    log('[AutoSell] Maksimal rekursiv chuqurlikka yetildi, to\'xtatildi.');
+    return false;
+  }
+
+  const label = turnOn ? 'Yoqish' : "O'chirish";
+  log(`[AutoSell] Boshlanmoqda (${label}), /shop yuborilmoqda...`);
+
+  let currentWindow = null;
+  let step = 1;
+  let resolved = false;
+  let updateDebounce = null; // updateSlot debounce uchun
+
+  // Oyna event listener'larini tozalash
+  const cleanup = () => {
+    if (currentWindow) {
+      try { currentWindow.removeAllListeners('updateSlot'); } catch (_) {}
+      try { bot.closeWindow(currentWindow); } catch (_) {}
+      currentWindow = null;
+    }
+    bot.removeListener('windowOpen', onWindowOpen);
+    if (updateDebounce) {
+      clearTimeout(updateDebounce);
+      updateDebounce = null;
+    }
+  };
+
+  return new Promise((resolve) => {
+    const finish = (success, reason) => {
+      if (resolved) return;
+      resolved = true;
       cleanup();
-      resolve(false);
+      if (!success && reason) log(`[AutoSell] Muvaffaqiyatsiz: ${reason}`);
+      resolve(success);
     };
 
-    // Helpler function to find an item by ID and/or name in the current window
-    const findItem = (window, nameId, customNameSubstring) => {
-      if (!window || !window.slots) return null;
-      // slots from 0 to window.inventoryStart - 1 are the container slots
-      for (let i = 0; i < window.inventoryStart; i++) {
-        const item = window.slots[i];
-        if (!item) continue;
-        
-        const isMatchId = item.name === nameId;
-        if (!isMatchId) continue;
-        
-        if (customNameSubstring) {
-          // Check displayName or customLore
-          const rawName = item.customName || item.displayName || '';
-          const cleanName = stripControlCodes(rawName).toUpperCase();
-          if (cleanName.includes(customNameSubstring)) {
-            return { item, slot: i };
-          }
-        } else {
-          return { item, slot: i };
-        }
-      }
-      return null;
-    };
-
-    const clickItem = async (slot) => {
-      try {
-        await bot.clickWindow(slot, 0, 0); // left click
-        await bot.waitForTicks(10); // Wait for server to process and open new window/update
-      } catch (err) {
-        fail(`Tugmani bosishda xato: ${err.message}`);
-      }
-    };
+    // ─── Oyna amallari ──────────────────────────────────────────────────────
 
     const runSteps = async (window) => {
       try {
-        // Step 1: Click Back (arrow) if in initial /shop menu
+        // Step 1: "Orqaga" (arrow) — agar mavjud bo'lsa bosish
         if (step === 1) {
           const arrow = findItem(window, 'arrow');
           if (arrow) {
-            log('[AutoSell] "Orqaga" (arrow) tugmasi topildi, bosilmoqda...');
+            log('[AutoSell] "Orqaga" (arrow) topildi, bosilmoqda...');
             step = 2;
-            await clickItem(arrow.slot);
-            return;
+            await clickSlot(window, arrow.slot);
+            return; // Keyingi oyna ochilguncha kutamiz
           } else {
-            // It might already be on the main menu, proceed to step 2
-            log('[AutoSell] "Orqaga" tugmasi topilmadi, ehtimol asosiy menyudamiz.');
+            log('[AutoSell] "Orqaga" topilmadi — asosiy menyudamiz.');
             step = 2;
+            // To'g'ridan-to'g'ri step 2 ga o'tish
           }
         }
 
-        // Step 2: Click Seller (player_head)
+        // Step 2: Sotuvchi (player_head)
         if (step === 2) {
-          let sellerHead = findItem(window, 'player_head', 'SOTUVCHI');
-          if (!sellerHead) {
-            // Fallback to slot 30 or 33 if it's a player head
+          let seller = findItem(window, 'player_head', 'SOTUVCHI');
+          if (!seller) {
+            // Fallback: 30 yoki 33-slot da player_head bor bo'lsa
             for (const slot of [30, 33]) {
               const item = window.slots[slot];
-              if (item && item.name === 'player_head') {
-                sellerHead = { item, slot };
+              if (item?.name === 'player_head') {
+                seller = { item, slot };
                 break;
               }
             }
           }
 
-          if (sellerHead) {
-            log('[AutoSell] "Sotuvchi" (player_head) tugmasi topildi, bosilmoqda...');
-            step = 3;
-            await clickItem(sellerHead.slot);
-            return;
-          } else {
-            fail('"Sotuvchi" tugmasi topilmadi!');
+          if (!seller) {
+            finish(false, '"Sotuvchi" (player_head) topilmadi!');
             return;
           }
+          log('[AutoSell] "Sotuvchi" (player_head) topildi, bosilmoqda...');
+          step = 3;
+          await clickSlot(window, seller.slot);
+          return;
         }
 
-        // Step 3: Click Hopper (Auto-sotuv menyusiga o'tish)
+        // Step 3: Avtosotuv (hopper)
         if (step === 3) {
           const hopper = findItem(window, 'hopper');
-          if (hopper) {
-            log('[AutoSell] "Avtosotuv" (hopper) tugmasi topildi, bosilmoqda...');
-            step = 4;
-            await clickItem(hopper.slot);
-            return;
-          } else {
-            fail('"Avtosotuv" (hopper) tugmasi topilmadi!');
+          if (!hopper) {
+            finish(false, '"Avtosotuv" (hopper) topilmadi!');
             return;
           }
+          log('[AutoSell] "Avtosotuv" (hopper) topildi, bosilmoqda...');
+          step = 4;
+          await clickSlot(window, hopper.slot);
+          return;
         }
 
-        // Step 4: Click lime_dye (On) or gray_dye (Off)
+        // Step 4: Toggle (lime_dye = Yoqish, gray_dye = O'chirish)
         if (step === 4) {
-          const targetItemName = turnOn ? 'lime_dye' : 'gray_dye';
-          const targetNameUz = turnOn ? 'Yoqish' : "O'chirish";
-          
-          const toggleBtn = findItem(window, targetItemName);
-          if (toggleBtn) {
-            log(`[AutoSell] "${targetNameUz}" (${targetItemName}) tugmasi topildi, bosilmoqda...`);
-            await clickItem(toggleBtn.slot);
-            
-            log(`[AutoSell] Muvaffaqiyatli ${targetNameUz} bajarildi.`);
-            cleanup();
-            
-            if (turnOn) {
-              log(`[AutoSell] 3 soniya kutilmoqda (sotish jarayoni)...`);
-              await new Promise(r => setTimeout(r, 3000));
-              log(`[AutoSell] Endi avtosotuvni o'chiramiz...`);
-              await executeAutoSellFlow(bot, false, log);
-            }
-            resolve(true);
-            return;
+          const targetName = turnOn ? 'lime_dye' : 'gray_dye';
+          const btn = findItem(window, targetName);
+
+          if (btn) {
+            log(`[AutoSell] "${label}" (${targetName}) topildi, bosilmoqda...`);
+            await clickSlot(window, btn.slot);
           } else {
-            // Agar allaqachon kerakli holatda bo'lsa (masalan, yoqiq bo'lsa lime_dye o'rniga faqat gray_dye bo'lishi mumkin)
-            log(`[AutoSell] "${targetItemName}" topilmadi, ehtimol allaqachon kerakli holatda.`);
-            cleanup();
-            
-            if (turnOn) {
-              log(`[AutoSell] 3 soniya kutilmoqda (sotish jarayoni)...`);
-              await new Promise(r => setTimeout(r, 3000));
-              log(`[AutoSell] Endi avtosotuvni o'chiramiz...`);
-              await executeAutoSellFlow(bot, false, log);
-            }
-            resolve(true);
-            return;
+            log(`[AutoSell] "${targetName}" topilmadi — ehtimol allaqachon kerakli holatda.`);
           }
+
+          // Oynani yopish va keyingi qadamni bajarish
+          try { bot.closeWindow(window); } catch (_) {}
+          currentWindow = null;
+          resolved = true; // Cleanup oldidan flag o'rnatish
+          cleanup();
+
+          if (turnOn) {
+            log(`[AutoSell] ${AUTO_SELL_ON_WAIT_MS / 1000}s kutilmoqda (sotish jarayoni)...`);
+            await sleep(AUTO_SELL_ON_WAIT_MS);
+            log("[AutoSell] Endi avtosotuvni o'chiramiz...");
+            const offResult = await executeAutoSellFlow(bot, false, log, _depth + 1);
+            resolve(offResult);
+          } else {
+            resolve(true);
+          }
+          return;
         }
       } catch (err) {
-        fail(`Oyna qadamida xato: ${err.message}`);
+        finish(false, `Oyna qadamida xato (step ${step}): ${err.message}`);
       }
     };
 
+    // ─── Click yordamchi funksiya ────────────────────────────────────────────
+
+    const clickSlot = async (window, slot) => {
+      try {
+        await bot.clickWindow(slot, 0, 0);
+        await bot.waitForTicks(TICKS_AFTER_CLICK);
+      } catch (err) {
+        throw new Error(`Click (slot ${slot}) xatosi: ${err.message}`);
+      }
+    };
+
+    // ─── windowOpen hodisasi ────────────────────────────────────────────────
+
     const onWindowOpen = async (window) => {
-      if (timeoutTimer) clearTimeout(timeoutTimer);
       currentWindow = window;
-      
-      // Reset timer for window operations
-      timeoutTimer = setTimeout(() => fail("Oyna amallari vaqti tugadi"), 10000);
-      
-      // Wait a tiny bit for items to populate fully in the window
-      await bot.waitForTicks(5);
-      
-      // Ensure we re-attach to update events of the new window
-      window.on('updateSlot', async () => {
-         // Debounce or just wait a tick before checking
-         await bot.waitForTicks(2);
-         runSteps(window);
+
+      // Oyna to'liq yuklanishini kutish
+      await bot.waitForTicks(TICKS_AFTER_OPEN);
+
+      // updateSlot — debounce bilan (ikki marta chaqirilmaslik uchun)
+      window.on('updateSlot', () => {
+        if (updateDebounce) clearTimeout(updateDebounce);
+        updateDebounce = setTimeout(() => {
+          updateDebounce = null;
+          if (!resolved) runSteps(window);
+        }, 200);
       });
 
       runSteps(window);
@@ -179,15 +215,23 @@ async function executeAutoSellFlow(bot, turnOn, log = console.log) {
 
     bot.on('windowOpen', onWindowOpen);
 
-    // Start the process
-    log(`[AutoSell] /shop komandasi yuborilmoqda (${turnOn ? 'Yoqish' : "O'chirish"})...`);
-    step = 1;
+    // /shop yuborish
     bot.chat('/shop');
-    
-    timeoutTimer = setTimeout(() => {
-      fail("/shop oynasi ochilmadi (Timeout)");
-    }, 10000);
+
+    // Oyna ochilmasa — timeout
+    const openTimeout = setTimeout(() => {
+      finish(false, '/shop oynasi ochilmadi (timeout)');
+    }, WINDOW_OPEN_TIMEOUT_MS);
+
+    // Oyna ochilganda timeout bekor qilinsin
+    bot.once('windowOpen', () => clearTimeout(openTimeout));
   });
+}
+
+// ─── Yordamchi ────────────────────────────────────────────────────────────────
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
 }
 
 module.exports = { executeAutoSellFlow };
