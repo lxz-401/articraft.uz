@@ -34,9 +34,10 @@ show_banner() {
 
 # ─── Input olish ─────────────────────────────────────────────────────────────
 read_input() {
-    local prompt="$1"
-    local default="$2"
-    local secret="${3:-}"
+    local var_name="$1"
+    local prompt="$2"
+    local default="$3"
+    local secret="${4:-}"
     local value
 
     if [ -n "$default" ]; then
@@ -45,18 +46,27 @@ read_input() {
         printf "  ${WHITE}%s: ${NC}" "$prompt"
     fi
 
-    if [ "$secret" = "secret" ]; then
-        read -rs value < /dev/tty
-        echo ""
+    if [ -t 0 ]; then
+        if [ "$secret" = "secret" ]; then
+            read -rs value
+            echo ""
+        else
+            read -r value
+        fi
     else
-        read -r value < /dev/tty
+        if [ "$secret" = "secret" ]; then
+            read -rs value < /dev/tty
+            echo ""
+        else
+            read -r value < /dev/tty
+        fi
     fi
 
     if [ -z "$value" ] && [ -n "$default" ]; then
-        echo "$default"
-    else
-        echo "$value"
+        value="$default"
     fi
+
+    eval "$var_name=\"\$value\""
 }
 
 # ─── Root tekshiruvi ──────────────────────────────────────────────────────────
@@ -193,7 +203,7 @@ create_env() {
 
     local tg_token=""
     while [ -z "$tg_token" ]; do
-        tg_token=$(read_input "Telegram Bot Token")
+        read_input tg_token "Telegram Bot Token"
         [ -z "$tg_token" ] && warn "Token kiritish shart!"
     done
 
@@ -203,7 +213,7 @@ create_env() {
 
     local tg_chat_id=""
     while [ -z "$tg_chat_id" ]; do
-        tg_chat_id=$(read_input "Telegram Chat ID (raqam)")
+        read_input tg_chat_id "Telegram Chat ID (raqam)"
         [ -z "$tg_chat_id" ] && warn "Chat ID kiritish shart!"
     done
 
@@ -225,19 +235,19 @@ TELEGRAM_FORWARD_CHAT=true
 
         local mc_user=""
         while [ -z "$mc_user" ]; do
-            mc_user=$(read_input "Minecraft Username (nick)")
+            read_input mc_user "Minecraft Username (nick)"
             [ -z "$mc_user" ] && warn "Username kiritish shart!"
         done
 
         local mc_pass
-        mc_pass=$(read_input "Minecraft Parol (bo'sh qoldirsangiz parolsiz)" "" secret)
+        read_input mc_pass "Minecraft Parol (bo'sh qoldirsangiz parolsiz)" "" "secret"
 
         local mc_host
-        mc_host=$(read_input "Server IP" "articraft.uz")
+        read_input mc_host "Server IP" "articraft.uz"
         local mc_port
-        mc_port=$(read_input "Server Port" "25565")
+        read_input mc_port "Server Port" "25565"
         local mc_ver
-        mc_ver=$(read_input "Minecraft Versiya" "1.21.1")
+        read_input mc_ver "Minecraft Versiya" "1.21.1"
 
         echo ""
         line
@@ -248,13 +258,13 @@ TELEGRAM_FORWARD_CHAT=true
         echo ""
 
         local central_url
-        central_url=$(read_input "Central Server URL (wss://...)")
+        read_input central_url "Central Server URL (wss://...)"
         local central_token
-        central_token=$(read_input "Central Token (admin beradi)" "" secret)
+        read_input central_token "Central Token (admin beradi)" "" "secret"
         local worker_id
-        worker_id=$(read_input "Worker ID (o'zingizga nom bering)" "worker_1")
+        read_input worker_id "Worker ID (o'zingizga nom bering)" "worker_1"
         local crops
-        crops=$(read_input "Ekin turlari (vergul bilan)" "cocoa,wheat,carrot,potato,beetroot")
+        read_input crops "Ekin turlari (vergul bilan)" "cocoa,wheat,carrot,potato,beetroot"
 
         # http URL hosil qilish
         local http_url
@@ -290,7 +300,7 @@ FARMING_CROPS=$crops
         line
 
         local token
-        token=$(read_input "Central Token (bo'sh qoldirsangiz avtomatik yaratiladi)" "" secret)
+        read_input token "Central Token (bo'sh qoldirsangiz avtomatik yaratiladi)" "" "secret"
         if [ -z "$token" ]; then
             token=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
             info "Avtomatik token yaratildi: $token"
@@ -298,9 +308,9 @@ FARMING_CROPS=$crops
         fi
 
         local ws_port
-        ws_port=$(read_input "WebSocket Port" "8765")
+        read_input ws_port "WebSocket Port" "8765"
         local http_port
-        http_port=$(read_input "HTTP API Port" "8766")
+        read_input http_port "HTTP API Port" "8766"
 
         env_content+="
 CENTRAL_MODE=true
@@ -423,7 +433,7 @@ echo ""
 
 INSTALL_MODE=""
 while [[ "$INSTALL_MODE" != "1" && "$INSTALL_MODE" != "2" ]]; do
-    INSTALL_MODE=$(read_input "Tanlovingiz" "1")
+    read_input INSTALL_MODE "Tanlovingiz" "1"
     if [[ "$INSTALL_MODE" != "1" && "$INSTALL_MODE" != "2" ]]; then
         warn "1 yoki 2 kiriting!"
     fi
@@ -465,7 +475,8 @@ create_env "$INSTALL_DIR" "$INSTALL_MODE"
 # Service
 echo ""
 line
-INSTALL_SERVICE=$(read_input "Bot server yoqilganda avtomatik ishga tushinmi? (H/y)" "H")
+INSTALL_SERVICE=""
+read_input INSTALL_SERVICE "Bot server yoqilganda avtomatik ishga tushinmi? (H/y)" "H"
 line
 
 if [[ "$INSTALL_SERVICE" =~ ^[Hh]$ ]] || [ -z "$INSTALL_SERVICE" ]; then
