@@ -71,7 +71,7 @@ read_input() {
 
 # ─── Sudo moslamasi ───────────────────────────────────────────────────────────
 SUDO_CMD=""
-if [ "$EUID" -ne 0 ]; then
+if [ "$(id -u)" -ne 0 ]; then
     if command -v sudo &>/dev/null; then
         SUDO_CMD="sudo"
     else
@@ -478,7 +478,7 @@ line
 
 if [[ "$INSTALL_SERVICE" =~ ^[Hh]$ ]] || [ -z "$INSTALL_SERVICE" ]; then
     if command -v systemctl &>/dev/null; then
-        if [ "$EUID" -ne 0 ] && [ -z "$SUDO_CMD" ]; then
+        if [ "$(id -u)" -ne 0 ] && [ -z "$SUDO_CMD" ]; then
              warn "systemd service o'rnatish uchun sudo kerak, biroq tizimda sudo mavjud emas."
              warn "Service o'rnatilmadi."
         else
