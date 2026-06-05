@@ -168,15 +168,14 @@ get_repo() {
     if [ -d "$install_dir/.git" ]; then
         info "Mavjud o'rnatma yangilanmoqda..."
         cd "$install_dir"
-        $SUDO_CMD git pull --quiet 2>/dev/null || true
+        git pull --quiet 2>/dev/null || true
         ok "Loyiha yangilandi"
     else
-        $SUDO_CMD mkdir -p "$(dirname "$install_dir")"
-        $SUDO_CMD git clone "$repo_url" "$install_dir" --quiet
+        mkdir -p "$(dirname "$install_dir")"
+        git clone "$repo_url" "$install_dir" --quiet
         ok "Loyiha yuklandi: $install_dir"
     fi
 
-    $SUDO_CMD chown -R "$USER:$USER" "$install_dir"
     cd "$install_dir"
 
     # npm o'rnatish
@@ -443,7 +442,7 @@ else
 fi
 
 # O'rnatma joyi
-INSTALL_DIR="/opt/articraft"
+INSTALL_DIR="$HOME/.articraft"
 info "O'rnatma joyi: $INSTALL_DIR"
 
 # ─── O'rnatish bosqichlari ────────────────────────────────────────────────────

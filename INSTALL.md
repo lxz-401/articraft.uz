@@ -89,4 +89,4 @@ https://nodejs.org/en/download sahifasidan qo'lda yuklab o'rnating.
 
 **Qo'lda ishga tushirish** (service o'rnatilmagan bo'lsa):
 - Windows: `cd %APPDATA%\ArtiCRAFT` → `node src\worker.js`
-- Linux: `cd /opt/articraft` → `node src/worker.js`
+- Linux: `cd ~/.articraft` → `node src/worker.js`
