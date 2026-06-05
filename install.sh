@@ -69,18 +69,18 @@ read_input() {
     eval "$var_name=\"\$value\""
 }
 
-# ─── Root tekshiruvi ──────────────────────────────────────────────────────────
-check_root() {
-    if [ "$EUID" -ne 0 ]; then
-        warn "Bu skript sudo bilan ishga tushirilmagan."
-        warn "Ba'zi funksiyalar (service o'rnatish) ishlamasligi mumkin."
-        echo ""
-        read -p "  sudo bilan qayta ishga tushirmoqchimisiz? (H/y): " confirm < /dev/tty
-        if [[ "$confirm" =~ ^[Hh]$ ]] || [ -z "$confirm" ]; then
-            exec sudo bash "$0" "$@"
-        fi
+# ─── Sudo moslamasi ───────────────────────────────────────────────────────────
+SUDO_CMD=""
+if [ "$EUID" -ne 0 ]; then
+    if command -v sudo &>/dev/null; then
+        SUDO_CMD="sudo"
+    else
+        warn "Siz root emassiz va 'sudo' dasturi topilmadi!"
+        warn "Ba'zi funksiyalar (papka yaratish, dastur o'rnatish) xato berishi mumkin."
     fi
-}
+fi
+
+
 
 # ─── Paket menejeri ───────────────────────────────────────────────────────────
 detect_pkg_manager() {
@@ -114,14 +114,14 @@ ensure_nodejs() {
     pkg_mgr=$(detect_pkg_manager)
 
     if [ "$pkg_mgr" = "apt" ]; then
-        curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
-        apt-get install -y nodejs >/dev/null 2>&1
+        curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO_CMD bash - >/dev/null 2>&1
+        $SUDO_CMD apt-get install -y nodejs >/dev/null 2>&1
     elif [ "$pkg_mgr" = "dnf" ]; then
-        curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
-        dnf install -y nodejs >/dev/null 2>&1
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO_CMD bash - >/dev/null 2>&1
+        $SUDO_CMD dnf install -y nodejs >/dev/null 2>&1
     elif [ "$pkg_mgr" = "yum" ]; then
-        curl -fsSL https://rpm.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
-        yum install -y nodejs >/dev/null 2>&1
+        curl -fsSL https://rpm.nodesource.com/setup_20.x | $SUDO_CMD bash - >/dev/null 2>&1
+        $SUDO_CMD yum install -y nodejs >/dev/null 2>&1
     else
         err "Paket menejeri topilmadi. Node.js ni qo'lda o'rnating: https://nodejs.org"
         exit 1
@@ -148,10 +148,10 @@ ensure_git() {
     pkg_mgr=$(detect_pkg_manager)
 
     case "$pkg_mgr" in
-        apt)    apt-get install -y git >/dev/null 2>&1 ;;
-        dnf)    dnf install -y git >/dev/null 2>&1 ;;
-        yum)    yum install -y git >/dev/null 2>&1 ;;
-        pacman) pacman -S --noconfirm git >/dev/null 2>&1 ;;
+        apt)    $SUDO_CMD apt-get install -y git >/dev/null 2>&1 ;;
+        dnf)    $SUDO_CMD dnf install -y git >/dev/null 2>&1 ;;
+        yum)    $SUDO_CMD yum install -y git >/dev/null 2>&1 ;;
+        pacman) $SUDO_CMD pacman -S --noconfirm git >/dev/null 2>&1 ;;
         *)      err "Git'ni qo'lda o'rnating"; exit 1 ;;
     esac
 
@@ -168,14 +168,15 @@ get_repo() {
     if [ -d "$install_dir/.git" ]; then
         info "Mavjud o'rnatma yangilanmoqda..."
         cd "$install_dir"
-        git pull --quiet 2>/dev/null || true
+        $SUDO_CMD git pull --quiet 2>/dev/null || true
         ok "Loyiha yangilandi"
     else
-        mkdir -p "$(dirname "$install_dir")"
-        git clone "$repo_url" "$install_dir" --quiet
+        $SUDO_CMD mkdir -p "$(dirname "$install_dir")"
+        $SUDO_CMD git clone "$repo_url" "$install_dir" --quiet
         ok "Loyiha yuklandi: $install_dir"
     fi
 
+    $SUDO_CMD chown -R "$USER:$USER" "$install_dir"
     cd "$install_dir"
 
     # npm o'rnatish
@@ -342,7 +343,7 @@ install_systemd_service() {
     mkdir -p "$install_dir/logs"
 
     # Service faylini yaratish
-    cat > "/etc/systemd/system/${service_name}.service" << EOF
+    cat > "/tmp/${service_name}.service" << EOF
 [Unit]
 Description=ArtiCRAFT Minecraft Bot
 After=network.target
@@ -350,7 +351,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=$SUDO_USER
+User=$USER
 WorkingDirectory=$install_dir
 ExecStart=$node_path $script_file
 Restart=always
@@ -363,9 +364,10 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 EOF
 
-    systemctl daemon-reload
-    systemctl enable "$service_name" >/dev/null 2>&1
-    systemctl start "$service_name"
+    $SUDO_CMD mv "/tmp/${service_name}.service" "/etc/systemd/system/${service_name}.service"
+    $SUDO_CMD systemctl daemon-reload
+    $SUDO_CMD systemctl enable "$service_name" >/dev/null 2>&1
+    $SUDO_CMD systemctl start "$service_name"
 
     ok "systemd service '$service_name' o'rnatildi va ishga tushirildi"
     info "Holati ko'rish:  systemctl status $service_name"
@@ -418,11 +420,6 @@ show_final_message() {
 # ═══════════════════════════════════════════════════════════
 
 show_banner
-
-# Sudo tekshiruvi (interaktiv rejimda)
-if [ -t 0 ]; then
-    check_root
-fi
 
 # Rejim tanlash
 echo -e "  ${CYAN}Qaysi rejimni o'rnatmoqchisiz?${NC}"
@@ -480,11 +477,13 @@ read_input INSTALL_SERVICE "Bot server yoqilganda avtomatik ishga tushinmi? (H/y
 line
 
 if [[ "$INSTALL_SERVICE" =~ ^[Hh]$ ]] || [ -z "$INSTALL_SERVICE" ]; then
-    if command -v systemctl &>/dev/null && [ "$EUID" -eq 0 ]; then
-        install_systemd_service "$INSTALL_DIR" "$INSTALL_MODE"
-    elif command -v systemctl &>/dev/null; then
-        warn "systemd service uchun sudo kerak. Quyidagi buyruqni ishga tushiring:"
-        echo -e "  ${YELLOW}sudo bash $INSTALL_DIR/install.sh${NC}"
+    if command -v systemctl &>/dev/null; then
+        if [ "$EUID" -ne 0 ] && [ -z "$SUDO_CMD" ]; then
+             warn "systemd service o'rnatish uchun sudo kerak, biroq tizimda sudo mavjud emas."
+             warn "Service o'rnatilmadi."
+        else
+             install_systemd_service "$INSTALL_DIR" "$INSTALL_MODE"
+        fi
     else
         warn "systemd topilmadi. Service o'rnatilmadi."
     fi
