@@ -46,10 +46,10 @@ read_input() {
     fi
 
     if [ "$secret" = "secret" ]; then
-        read -rs value
+        read -rs value < /dev/tty
         echo ""
     else
-        read -r value
+        read -r value < /dev/tty
     fi
 
     if [ -z "$value" ] && [ -n "$default" ]; then
@@ -65,7 +65,7 @@ check_root() {
         warn "Bu skript sudo bilan ishga tushirilmagan."
         warn "Ba'zi funksiyalar (service o'rnatish) ishlamasligi mumkin."
         echo ""
-        read -p "  sudo bilan qayta ishga tushirmoqchimisiz? (H/y): " confirm
+        read -p "  sudo bilan qayta ishga tushirmoqchimisiz? (H/y): " confirm < /dev/tty
         if [[ "$confirm" =~ ^[Hh]$ ]] || [ -z "$confirm" ]; then
             exec sudo bash "$0" "$@"
         fi
